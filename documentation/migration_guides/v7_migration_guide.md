@@ -22,3 +22,13 @@ encodes/decodes the `$dynamicRef` keyword. Schemas whose only attribute is
 `$dynamicRef` now decode as `.dynamicReference` instead of decoding as an empty
 `.fragment` with an "unsupported attributes" warning.
 
+### `$ref` with a plain fragment now round-trips verbatim
+
+As part of anchor support, `JSONReference.InternalReference` now parses a `$ref`
+whose fragment has no leading `/` (e.g. `{"$ref": "#foo"}`) as `.anchor("foo")`
+rather than `.path(...)`. The practical effect is that such references round-trip
+verbatim (`"#foo"`) instead of being rewritten with a slash (`"#/foo"`).
+References into the Components Object (`#/components/...`) and JSON-pointer paths
+(`#/foo/bar`) are unaffected.
+
+

@@ -77,6 +77,23 @@ final class JSONSchemaDynamicReferenceTests: XCTestCase {
         XCTAssertTrue(encodedString.contains("#category"))
     }
 
+    func test_refWithPlainFragmentRoundTripsAsAnchor() throws {
+        // A `$ref` whose fragment has no leading '/' (e.g. "#foo") is a plain
+        // anchor reference. It must round-trip verbatim rather than being
+        // rewritten with a slash.
+        let data = "{\"$ref\":\"#foo\"}".data(using: .utf8)!
+
+        let schema = try orderUnstableDecode(JSONSchema.self, from: data)
+        XCTAssertTrue(schema.isReference)
+        XCTAssertEqual(schema.reference?.absoluteString, "#foo")
+
+        let encoded = try orderUnstableEncode(schema)
+        let encodedString = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        XCTAssertTrue(encodedString.contains("$ref"))
+        XCTAssertTrue(encodedString.contains("#foo"))
+        XCTAssertFalse(encodedString.contains("#/foo"))
+    }
+
     func test_dynamicReference_roundTripThroughDocument() throws {
         // A realistic recursive schema: BaseCategory is extended by
         // LocalizedCategory via `allOf` + `$dynamicAnchor`. Children point
@@ -257,8 +274,50 @@ final class JSONSchemaDynamicReferenceTests: XCTestCase {
         }
     }
 
-    func test_dereference_dynamicReference_unresolvedIsPreserved() throws {
-        // A `$dynamicRef` whose anchor is not in scope must be preserved
+    func test_dereference_dynamicScopePropagatesAcrossRefBoundary() throws {
+        // `Outer` references `Inner`. The dynamic anchor "leaf" lives in
+        // `Outer`'s `$defs`; `Inner` contains the `$dynamicRef`. The dynamic
+        // scope must travel across the `$ref` boundary so Inner's dynamic ref
+        // resolves to Outer's concrete leaf type.
+        let components = OpenAPI.Components(
+            schemas: [
+                "Outer": .reference(
+                    .component(named: "Inner"),
+                    .init(
+                        defs: [
+                            "L": .boolean(.init(dynamicAnchor: "leaf"))
+                        ]
+                    )
+                ),
+                "Inner": .object(
+                    .init(),
+                    .init(properties: [
+                        "flag": .dynamicReference(.anchor("leaf"))
+                    ])
+                )
+            ]
+        )
+
+        let outer = try XCTUnwrap(components.schemas["Outer"])
+        let dereferenced = try outer.dereferenced(in: components)
+
+        // Outer is a reference to Inner, so after dereferencing we see Inner's
+        // object shape with `flag` resolved through the dynamic scope.
+        guard case .object(_, let objectContext) = dereferenced else {
+            XCTFail("expected .object, got \(dereferenced)")
+            return
+        }
+        let flag: DereferencedJSONSchema = try XCTUnwrap(objectContext.properties["flag"])
+
+        // The dynamic ref resolved to Outer's `$defs.L` (boolean) -- proving
+        // the scope crossed the `$ref` from Outer into Inner.
+        guard case .boolean = flag else {
+            XCTFail("expected flag to resolve to Outer's `$defs.L` (.boolean) across the $ref, got \(flag)")
+            return
+        }
+    }
+
+    func test_dereference_dynamicReference_unresolvedIsPreserved() throws {        // A `$dynamicRef` whose anchor is not in scope must be preserved
         // rather than degraded to an empty/`any` schema.
         let jsonString = """
         {
